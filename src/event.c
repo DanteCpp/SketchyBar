@@ -282,6 +282,12 @@ static void event_mouse_scrolled(void* context) {
 
     struct popup* popup = bar_manager_get_popup_by_wid(&g_bar_manager, wid);
     if (popup) {
+      // machy fork: a capped popup scrolls its own contents first.
+      if (popup_scroll(popup, scroll_delta + g_scroll_info.delta_y)) {
+        bar_manager_refresh(&g_bar_manager, true);
+        g_scroll_info.delta_y = 0;
+        return;
+      }
       // Handle global mouse scrolled event
       if (popup->mouse_over
           && !bar_manager_mouse_over_any_bar(&g_bar_manager)) {
@@ -292,6 +298,21 @@ static void event_mouse_scrolled(void* context) {
                                                  modifier_keys           );
       }
 
+      g_scroll_info.delta_y = 0;
+      return;
+    }
+  }
+
+  // machy fork: a scroll over a row of a capped popup scrolls the popup,
+  // unless the row wants the wheel for itself (a volume slider does) — an
+  // item that subscribed to mouse.scrolled always wins.
+  if (bar_item
+      && bar_item->position == POSITION_POPUP
+      && bar_item->parent
+      && !(bar_item->update_mask & UPDATE_MOUSE_SCROLLED)) {
+    struct popup* popup = &bar_item->parent->popup;
+    if (popup_scroll(popup, scroll_delta + g_scroll_info.delta_y)) {
+      bar_manager_refresh(&g_bar_manager, true);
       g_scroll_info.delta_y = 0;
       return;
     }

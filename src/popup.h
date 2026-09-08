@@ -21,6 +21,14 @@ struct popup {
   uint32_t blur_radius;
   int y_offset;
 
+  // machy fork: a popup taller than max_height is clipped to it and scrolls.
+  // content_height is the unclipped height of the stacked rows, scroll_offset
+  // how far the content is pushed up, both in points.
+  uint32_t max_height;
+  uint32_t content_height;
+  uint32_t scroll_step;
+  int scroll_offset;
+
   CGPoint anchor;
   struct window window;
 
@@ -45,5 +53,8 @@ void popup_draw(struct popup* popup);
 void popup_destroy(struct popup* popup);
 
 void popup_change_space(struct popup* popup, uint64_t dsid, uint32_t adid);
+bool popup_is_scrollable(struct popup* popup);
+bool popup_scroll(struct popup* popup, int delta);
+void popup_reset_scroll(struct popup* popup);
 void popup_serialize(struct popup* popup, char* indent, FILE* rsp);
 bool popup_parse_sub_domain(struct popup* popup, FILE* rsp, struct token property, char* message);

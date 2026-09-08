@@ -6,6 +6,12 @@ struct background {
   float clip;
   bool overrides_height;
 
+  // machy fork: 0..100. Below 100 the box is painted in two parts — the
+  // leading `fill` percent in fill_color, the whole box in color — which is
+  // how a share bar sits behind a row's text.
+  uint32_t fill;
+  struct color fill_color;
+
   int padding_left;
   int padding_right;
   int x_offset;

@@ -35,6 +35,7 @@ void bar_item_init(struct bar_item* bar_item, struct bar_item* default_item) {
   bar_item->event_port = 0;
   bar_item->shadow = false;
   bar_item->scroll_texts = false;
+  bar_item->popup_inline = false;
   bar_item->mouse_over = false;
 
   bar_item->has_const_width = false;
@@ -226,8 +227,14 @@ void bar_item_on_click(struct bar_item* bar_item, uint32_t type, uint32_t mouse_
                string_copy(get_modifier_description(modifier)));
 
   if (bar_item->has_slider) {
-    if (bar_item->slider.is_dragged
-        || CGRectContainsPoint(bar_item->slider.background.bounds, point)) {
+    // machy fork: hit-test the slider by its horizontal span only. The track
+    // of a thin slider is a few points tall, which upstream makes an almost
+    // unhittable target; the row it sits in is the affordance the user aims
+    // at, so any click inside the row counts as a click on the track.
+    CGRect track = bar_item->slider.background.bounds;
+    bool on_track = point.x >= track.origin.x
+                    && point.x <= track.origin.x + track.size.width;
+    if (bar_item->slider.is_dragged || on_track) {
       if (slider_handle_drag(&bar_item->slider, point)) {
         bar_item_needs_update(bar_item);
       }
@@ -893,6 +900,7 @@ void bar_item_serialize(struct bar_item* bar_item, FILE* rsp) {
                "\t\t\"padding_left\": %d,\n"
                "\t\t\"padding_right\": %d,\n"
                "\t\t\"scroll_texts\": \"%s\",\n"
+               "\t\t\"inline\": \"%s\",\n"
                "\t\t\"width\": %d,\n"
                "\t\t\"background\": {\n",
                bar_item->name,
@@ -906,6 +914,7 @@ void bar_item_serialize(struct bar_item* bar_item, FILE* rsp) {
                bar_item->background.padding_left,
                bar_item->background.padding_right,
                format_bool(bar_item->scroll_texts),
+               format_bool(bar_item->popup_inline),
                bar_item->has_const_width ? bar_item->custom_width : -1);
 
   background_serialize(&bar_item->background, "\t\t\t", rsp, true);
@@ -1075,6 +1084,14 @@ void bar_item_parse_set_message(struct bar_item* bar_item, char* message, FILE* 
   } else if (token_equals(property, PROPERTY_SCROLL_TEXTS)) {
     bar_item->scroll_texts = evaluate_boolean_state(get_token(&message),
                                                     bar_item->scroll_texts);
+  } else if (token_equals(property, PROPERTY_INLINE)) {
+    // machy fork: popup grid rows.
+    bool inl = evaluate_boolean_state(get_token(&message),
+                                      bar_item->popup_inline);
+    if (inl != bar_item->popup_inline) {
+      bar_item->popup_inline = inl;
+      needs_refresh = true;
+    }
   } else if (token_equals(property, PROPERTY_WIDTH)) {
     struct token token = get_token(&message);
     if (token_equals(token, ARGUMENT_DYNAMIC)) {

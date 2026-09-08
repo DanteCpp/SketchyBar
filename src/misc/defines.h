@@ -65,6 +65,11 @@
 #define PROPERTY_BLUR_RADIUS                   "blur_radius"
 #define PROPERTY_DRAWING                       "drawing"
 #define PROPERTY_CLIP                          "clip"
+// machy fork: paint only the leading `fill` percent of the background box, so
+// a row can carry a share/progress bar BEHIND its own text without a second
+// item and without changing the row's width.
+#define PROPERTY_FILL                          "fill"
+#define PROPERTY_FILL_COLOR_BG                 "fill_color"
 #define PROPERTY_DISTANCE                      "distance"
 #define PROPERTY_ANGLE                         "angle"
 #define PROPERTY_SCALE                         "scale"
@@ -101,6 +106,9 @@
 #define PROPERTY_EVENT_PORT                    "mach_helper"
 #define PROPERTY_PERCENTAGE                    "percentage"
 #define PROPERTY_MAX_CHARS                     "max_chars"
+// machy fork: lay this item out on the same popup row as the previous one,
+// instead of starting a new row below it. Turns a vertical popup into a grid.
+#define PROPERTY_INLINE                        "inline"
 
 #define DOMAIN_BAR                             "--bar"
 #define PROPERTY_POSITION                      "position"
@@ -118,6 +126,10 @@
 #define PROPERTY_NOTCH_OFFSET                  "notch_offset"
 #define PROPERTY_NOTCH_DISPLAY_HEIGHT          "notch_display_height"
 #define PROPERTY_HORIZONTAL                    "horizontal"
+// machy fork: cap a popup's height and scroll its contents past the cap.
+#define PROPERTY_MAX_HEIGHT                    "max_height"
+#define PROPERTY_SCROLL_OFFSET                 "scroll_offset"
+#define PROPERTY_SCROLL_STEP                   "scroll_step"
 
 #define DOMAIN_SUBSCRIBE                       "--subscribe"
 #define COMMAND_SUBSCRIBE_FRONT_APP_SWITCHED   "front_app_switched"

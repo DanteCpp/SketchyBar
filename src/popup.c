@@ -16,6 +16,10 @@ void popup_init(struct popup* popup, struct bar_item* host) {
   popup->align = POSITION_LEFT;
   popup->blur_radius = 0;
   popup->topmost = true;
+  popup->max_height = 0;
+  popup->content_height = 0;
+  popup->scroll_step = 1;
+  popup->scroll_offset = 0;
   
   popup->num_items = 0;
   popup->cell_size = 30;
@@ -108,8 +112,32 @@ static void popup_calculate_popup_anchor_for_bar_item(struct popup* popup, struc
   popup_set_anchor(&bar_item->popup, anchor, popup->adid);
 }
 
+// machy fork: is there more content than the popup is allowed to show?
+bool popup_is_scrollable(struct popup* popup) {
+  return popup->max_height > 0 && popup->content_height > popup->max_height;
+}
+
+void popup_reset_scroll(struct popup* popup) {
+  popup->scroll_offset = 0;
+}
+
+// machy fork: scroll by whole rows. Snapping to row boundaries means every
+// row on screen is drawn in full — sketchybar gives each item its own window
+// and clips nothing, so a half-scrolled row would spill its text outside the
+// popup box and over the bar.
+bool popup_scroll(struct popup* popup, int delta) {
+  if (!popup_is_scrollable(popup)) return false;
+  int step = (int)(popup->scroll_step > 0 ? popup->scroll_step : 1);
+  int offset = popup->scroll_offset - (delta > 0 ? step : -step);
+  if (offset < 0) offset = 0;
+  if (offset == popup->scroll_offset) return false;
+  popup->scroll_offset = offset;
+  return true;
+}
+
 void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
-  uint32_t y = popup->background.border_width;
+  uint32_t border = popup->background.border_width;
+  uint32_t y = border;
   uint32_t x = 0;
   uint32_t total_item_width = 0;
   uint32_t width = 0;
@@ -140,22 +168,118 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
         && popup->background.image.enabled) {
       uint32_t image_height = image_get_size(&popup->background.image).height;
       if (image_height > height) height = image_height;
-      
+
       x = (width - total_item_width) / 2;
     }
   }
 
+  // machy fork: the row table. A vertical popup normally puts every item on a
+  // row of its own; an item with `inline=on` joins the row its predecessor
+  // opened, which turns the stack into a grid (a row of buttons, a label and
+  // its value side by side). A horizontal popup is one row by definition, so
+  // the table collapses to a single entry and the layout below reduces to
+  // exactly what upstream does.
+  uint32_t item_count = popup->num_items > 0 ? popup->num_items : 1;
+  uint32_t row_height[item_count];
+  int32_t item_row[item_count];
+  uint32_t num_rows = 0;
+
+  for (int j = 0; j < popup->num_items; j++) {
+    struct bar_item* bar_item = popup->items[j];
+    item_row[j] = -1;
+    if (!bar_item->drawing) continue;
+    if (bar_item->type == BAR_COMPONENT_GROUP) continue;
+
+    uint32_t cell_height = popup->horizontal
+                           ? height
+                           : max(bar_item_get_height(bar_item),
+                                 popup->cell_size              );
+
+    bool joins = num_rows > 0
+                 && (popup->horizontal || bar_item->popup_inline);
+
+    if (joins) {
+      if (cell_height > row_height[num_rows - 1])
+        row_height[num_rows - 1] = cell_height;
+    } else {
+      row_height[num_rows] = cell_height;
+      num_rows++;
+    }
+    item_row[j] = num_rows - 1;
+  }
+
+  popup->content_height = 2*border;
+  for (uint32_t r = 0; r < num_rows; r++) popup->content_height += row_height[r];
+
+  // The visible slice of rows, [first_row, last_row). Without a max_height (or
+  // with content that fits under it) that is every row and the popup behaves
+  // as it always has.
+  uint32_t first_row = 0;
+  uint32_t last_row = num_rows;
+
+  if (!popup->horizontal && popup_is_scrollable(popup)) {
+    uint32_t budget = popup->max_height > 2*border
+                      ? popup->max_height - 2*border
+                      : 0;
+
+    // The furthest we may scroll is the first row from which everything left
+    // still fits, so the last page is never a lone row above dead space.
+    uint32_t max_scroll = num_rows > 0 ? num_rows - 1 : 0;
+    uint32_t acc = 0;
+    for (int32_t r = (int32_t)num_rows - 1; r >= 0; r--) {
+      if (acc + row_height[r] > budget) break;
+      acc += row_height[r];
+      max_scroll = (uint32_t)r;
+    }
+
+    if (popup->scroll_offset < 0) popup->scroll_offset = 0;
+    if ((uint32_t)popup->scroll_offset > max_scroll)
+      popup->scroll_offset = (int)max_scroll;
+
+    first_row = (uint32_t)popup->scroll_offset;
+    acc = 0;
+    last_row = first_row;
+    for (uint32_t r = first_row; r < num_rows; r++) {
+      if (acc + row_height[r] > budget) break;
+      acc += row_height[r];
+      last_row = r + 1;
+    }
+    // A single row taller than the budget still has to be drawn; better an
+    // overlong popup than an empty one.
+    if (last_row == first_row && num_rows > 0) last_row = first_row + 1;
+  } else {
+    popup->scroll_offset = 0;
+  }
+
+  int32_t current_row = -1;
   for (int j = 0; j < popup->num_items; j++) {
     struct bar_item* bar_item = NULL;
     bar_item = popup->items[j];
     if (!bar_item->drawing) continue;
     if (bar_item->type == BAR_COMPONENT_GROUP) continue;
 
-    uint32_t cell_height = max(bar_item_get_height(bar_item),
-                               popup->cell_size              );
+    uint32_t row = (uint32_t)item_row[j];
+
+    // Scrolled out of view: park the window offscreen. bar.c hides items the
+    // same way, and it keeps the popup's item list untouched, so the next
+    // scroll brings the row straight back.
+    if (row < first_row || row >= last_row) {
+      if (popup->adid > 0) {
+        struct window* window = bar_item_get_window(bar_item, popup->adid);
+        if (!CGPointEqualToPoint(window->origin, g_nirvana))
+          window_move(window, g_nirvana);
+      }
+      continue;
+    }
+
+    if ((int32_t)row != current_row) {
+      if (current_row >= 0) y += row_height[current_row];
+      if (!popup->horizontal) x = 0;
+      current_row = (int32_t)row;
+    }
 
     uint32_t item_x = max((int)x + bar_item->background.padding_left, 0);
-    uint32_t item_height = popup->horizontal ? height : cell_height;
+    uint32_t item_height = row_height[row];
     uint32_t item_y = item_height / 2;
 
     uint32_t item_width = bar_item->background.padding_right
@@ -178,10 +302,10 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     if (bar_item->popup.drawing)
       popup_calculate_popup_anchor_for_bar_item(popup, bar_item, bar);
 
-    if (item_width > width && !popup->horizontal) width = item_width;
-    if (popup->horizontal) x += item_width;
-    else y += cell_height;
+    x += item_width;
+    if (!popup->horizontal && x > width) width = x;
   }
+  if (current_row >= 0) y += row_height[current_row];
 
   for (int j = 0; j < popup->num_items; j++) {
     if (popup->adid <= 0) break;
@@ -211,7 +335,6 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     if (!popup->background.enabled || !popup->background.image.enabled) {
       width = x + popup->background.border_width;
     }
-    y += height;
   }
   else if (!popup->background.enabled || !popup->background.image.enabled) {
     width += popup->background.border_width;
@@ -318,6 +441,9 @@ void popup_clear_pointers(struct popup* popup) {
 
 bool popup_set_drawing(struct popup* popup, bool drawing) {
   if (popup->drawing == drawing) return false;
+  // machy fork: a popup always opens at the top of its content, the way the
+  // reference panels reset their scroll position on open.
+  popup_reset_scroll(popup);
   if (!drawing) popup_close_window(popup);
   popup->drawing = drawing;
   popup->adid = 0;
@@ -397,6 +523,10 @@ void popup_serialize(struct popup* popup, char* indent, FILE* rsp) {
   fprintf(rsp, "%s\"drawing\": \"%s\",\n"
                "%s\"horizontal\": \"%s\",\n"
                "%s\"height\": %d,\n"
+               "%s\"max_height\": %u,\n"
+               "%s\"content_height\": %u,\n"
+               "%s\"scroll_offset\": %d,\n"
+               "%s\"scroll_step\": %u,\n"
                "%s\"blur_radius\": %u,\n"
                "%s\"y_offset\": %d,\n"
                "%s\"align\": \"%s\",\n"
@@ -404,6 +534,10 @@ void popup_serialize(struct popup* popup, char* indent, FILE* rsp) {
                indent, format_bool(popup->drawing),
                indent, format_bool(popup->horizontal),
                indent, popup->overrides_cell_size ? popup->cell_size : -1,
+               indent, popup->max_height,
+               indent, popup->content_height,
+               indent, popup->scroll_offset,
+               indent, popup->scroll_step,
                indent, popup->blur_radius,
                indent, popup->y_offset,
                indent, align, indent                                      );
@@ -430,6 +564,29 @@ static bool popup_set_cell_size(struct popup* popup, int size) {
   if (popup->cell_size == size && popup->overrides_cell_size) return false;
   popup->overrides_cell_size = true;
   popup->cell_size = size;
+  return true;
+}
+
+// machy fork ----------------------------------------------------------------
+static bool popup_set_max_height(struct popup* popup, int height) {
+  uint32_t value = height > 0 ? (uint32_t)height : 0;
+  if (popup->max_height == value) return false;
+  popup->max_height = value;
+  popup_reset_scroll(popup);
+  return true;
+}
+
+static bool popup_set_scroll_step(struct popup* popup, int step) {
+  uint32_t value = step > 0 ? (uint32_t)step : 1;
+  if (popup->scroll_step == value) return false;
+  popup->scroll_step = value;
+  return true;
+}
+
+static bool popup_set_scroll_offset(struct popup* popup, int offset) {
+  if (offset < 0) offset = 0;
+  if (popup->scroll_offset == offset) return false;
+  popup->scroll_offset = offset;
   return true;
 }
 
@@ -466,6 +623,12 @@ bool popup_parse_sub_domain(struct popup* popup, FILE* rsp, struct token propert
             popup->blur_radius,
             token_to_int(get_token(&message)));
     return false;
+  } else if (token_equals(property, PROPERTY_MAX_HEIGHT)) {
+    return popup_set_max_height(popup, token_to_int(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_SCROLL_STEP)) {
+    return popup_set_scroll_step(popup, token_to_int(get_token(&message)));
+  } else if (token_equals(property, PROPERTY_SCROLL_OFFSET)) {
+    return popup_set_scroll_offset(popup, token_to_int(get_token(&message)));
   } else if (token_equals(property, PROPERTY_TOPMOST)) {
     return popup_set_topmost(popup,
                              evaluate_boolean_state(get_token(&message),

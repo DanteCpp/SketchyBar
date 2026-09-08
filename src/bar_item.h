@@ -38,6 +38,9 @@ struct bar_item {
   bool shadow;
   bool has_const_width;
   bool scroll_texts;
+  // machy fork: continue on the previous popup row instead of opening a new
+  // one. Only meaningful for items whose position is POSITION_POPUP.
+  bool popup_inline;
   char align;
   uint32_t custom_width;
   uint32_t blur_radius;

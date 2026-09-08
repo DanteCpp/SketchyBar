@@ -6,6 +6,8 @@
 #include "bar_manager.h"
 
 void background_init(struct background* background) {
+  background->fill = 100;
+  color_set_hex(&background->fill_color, 0x00000000);
   background->enabled = false;
   background->clip = 0.f;
   background->clips = NULL;
@@ -68,6 +70,19 @@ static bool background_set_clip(struct background* background, float clip) {
   g_bar_manager.might_need_clipping = true;
   if (clip > 0.f) background_set_enabled(background, true);
   return true;
+}
+
+// machy fork ----------------------------------------------------------------
+static bool background_set_fill(struct background* background, int fill) {
+  uint32_t value = fill < 0 ? 0 : (fill > 100 ? 100 : (uint32_t)fill);
+  if (background->fill == value) return false;
+  background->fill = value;
+  return true;
+}
+
+static bool background_set_fill_color(struct background* background, uint32_t color) {
+  bool changed = background_set_enabled(background, true);
+  return color_set_hex(&background->fill_color, color) || changed;
 }
 
 static bool background_set_border_color(struct background* background, uint32_t color) {
@@ -224,6 +239,31 @@ void background_draw(struct background* background, CGContextRef context) {
             background->border_width,
             &background->border_color);
 
+  // machy fork: the share bar. Painted over the box, borderless, clipped to
+  // the same corner radius so a partial fill still reads as one rounded row.
+  if (background->fill < 100 && background->fill_color.a > 0) {
+    CGRect fill_bounds = background_bounds;
+    fill_bounds.size.width = background_bounds.size.width
+                             * ((float)background->fill) / 100.f;
+    if (fill_bounds.size.width > 0.f) {
+      CGContextSaveGState(context);
+      CGContextBeginPath(context);
+      CGPathRef clip = CGPathCreateWithRoundedRect(background_bounds,
+                                                   background->corner_radius,
+                                                   background->corner_radius,
+                                                   NULL                      );
+      CGContextAddPath(context, clip);
+      CGContextClip(context);
+      CGPathRelease(clip);
+      draw_rect(context, fill_bounds, &background->fill_color, 0, 0,
+                &background->fill_color);
+      CGContextRestoreGState(context);
+    }
+  } else if (background->fill >= 100 && background->fill_color.a > 0) {
+    draw_rect(context, background_bounds, &background->fill_color,
+              background->corner_radius, 0, &background->fill_color);
+  }
+
   if (background->image.enabled)
     image_draw(&background->image, context);
 
@@ -252,6 +292,8 @@ void background_serialize(struct background* background, char* indent, FILE* rsp
                "%s\"border_width\": %u,\n"
                "%s\"height\": %u,\n"
                "%s\"corner_radius\": %u,\n"
+               "%s\"fill\": %u,\n"
+               "%s\"fill_color\": \"0x%x\",\n"
                "%s\"padding_left\": %d,\n"
                "%s\"padding_right\": %d,\n"
                "%s\"x_offset\": %d,\n"
@@ -263,6 +305,8 @@ void background_serialize(struct background* background, char* indent, FILE* rsp
                indent, background->border_width,
                indent, background->overrides_height ? (int)background->bounds.size.height : 0,
                indent, background->corner_radius,
+               indent, background->fill,
+               indent, background->fill_color.hex,
                indent, background->padding_left,
                indent, background->padding_right,
                indent, background->x_offset,
@@ -322,6 +366,20 @@ bool background_parse_sub_domain(struct background* background, FILE* rsp, struc
                   background,
                   background->color.hex,
                   token_to_int(token)   );
+  }
+  else if (token_equals(property, PROPERTY_FILL)) {
+    struct token token = get_token(&message);
+    ANIMATE(background_set_fill,
+            background,
+            background->fill,
+            token_to_int(token));
+  }
+  else if (token_equals(property, PROPERTY_FILL_COLOR_BG)) {
+    struct token token = get_token(&message);
+    ANIMATE_BYTES(background_set_fill_color,
+                  background,
+                  background->fill_color.hex,
+                  token_to_int(token)         );
   }
   else if (token_equals(property, PROPERTY_BORDER_COLOR)) {
     struct token token = get_token(&message);
