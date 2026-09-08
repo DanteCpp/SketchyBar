@@ -15,6 +15,14 @@ LIBS     = -framework Carbon \
 ODIR     = bin
 SRC      = src
 
+# Ad-hoc code signature. The linker's automatic "linker-signed" signature
+# (codesign flags 0x20002) is treated as ephemeral by macOS TCC, which then
+# refuses to PERSIST a permission grant against the binary: a bar that polls
+# Bluetooth or Location re-prompts on every poll, forever. A real ad-hoc
+# signature (flags 0x2) with a stable identifier gives TCC something to
+# remember. Homebrew ad-hoc signs upstream's bottle for the same reason.
+SIGN     = codesign --force --sign - --identifier sketchybar
+
 _OBJ = alias.o background.o bar_item.o custom_events.o event.o graph.o \
 			 image.o mouse.o shadow.o font.o text.o message.o mouse.o bar.o color.o \
 			 window.o bar_manager.o display.o display_nsscreen.om group.o mach.o popup.o \
@@ -47,6 +55,7 @@ universal:
 	$(MAKE) arm64
 	mv $(ODIR)/sketchybar $(ODIR)/sketchybar_arm64
 	lipo -create -output $(ODIR)/sketchybar $(ODIR)/sketchybar_x86 $(ODIR)/sketchybar_arm64
+	$(SIGN) $(ODIR)/sketchybar
 
 debug: CFLAGS=-std=c99 -Wall -g
 debug: arm64
@@ -57,6 +66,7 @@ asan: clean arm64
 
 $(ODIR)/sketchybar: $(SRC)/sketchybar.c $(OBJ) | $(ODIR)
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
+	$(SIGN) $@
 
 $(ODIR)/%.o: $(SRC)/%.c $(SRC)/%.h | $(ODIR)
 	$(CC) -c -o $@ $< $(CFLAGS)

@@ -76,4 +76,11 @@ make            # universal binary in ./bin/sketchybar
 make arm64      # or a single arch
 ```
 
+The build ad-hoc signs the binary (`codesign --sign - --identifier sketchybar`).
+That is not cosmetic: without it the linker's automatic "linker-signed"
+signature is all the binary has, and macOS TCC treats those as ephemeral — it
+will not PERSIST a permission grant against one. A bar that polls Bluetooth or
+Location then re-prompts on every poll, forever. Homebrew ad-hoc signs
+upstream's bottle for the same reason.
+
 Licensed GPL-3.0-only, like upstream.
