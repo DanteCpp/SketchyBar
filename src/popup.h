@@ -17,6 +17,7 @@ struct popup {
   char align;
 
   uint32_t adid;
+  uint32_t display_id; // 0 follows focus; otherwise a physical display ID.
   uint32_t cell_size;
   uint32_t blur_radius;
   int y_offset;
@@ -27,6 +28,7 @@ struct popup {
   uint32_t max_height;
   uint32_t content_height;
   uint32_t scroll_step;
+  uint32_t scroll_max_offset;
   int scroll_offset;
 
   CGPoint anchor;
@@ -39,6 +41,7 @@ struct popup {
   struct background background;
 };
 
+uint32_t popup_display_adid(struct popup* popup);
 void popup_init(struct popup* popup, struct bar_item* host);
 void popup_set_anchor(struct popup* popup, CGPoint anchor, uint32_t adid);
 void popup_add_item(struct popup* popup, struct bar_item* item);

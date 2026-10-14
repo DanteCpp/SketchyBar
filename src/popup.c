@@ -3,6 +3,7 @@
 #include "bar_manager.h"
 #include "bar.h"
 #include "animation.h"
+#include "display.h"
 
 void popup_init(struct popup* popup, struct bar_item* host) {
   popup->drawing = false;
@@ -13,12 +14,14 @@ void popup_init(struct popup* popup, struct bar_item* host) {
   popup->anchor = (CGPoint){0, 0};
   popup->y_offset = 0;
   popup->adid = 0;
+  popup->display_id = 0;
   popup->align = POSITION_LEFT;
   popup->blur_radius = 0;
   popup->topmost = true;
   popup->max_height = 0;
   popup->content_height = 0;
   popup->scroll_step = 1;
+  popup->scroll_max_offset = 0;
   popup->scroll_offset = 0;
   
   popup->num_items = 0;
@@ -29,6 +32,20 @@ void popup_init(struct popup* popup, struct bar_item* host) {
   window_init(&popup->window);
   color_set_hex(&popup->background.border_color, 0xffff0000);
   color_set_hex(&popup->background.color, 0x44000000);
+}
+
+// Nested cards inherit their parent's display. Store a physical ID rather
+// than an arrangement index so a topology change cannot retarget a card.
+uint32_t popup_display_adid(struct popup* popup) {
+  if (popup->host && popup->host->parent)
+    return popup_display_adid(&popup->host->parent->popup);
+  if (popup->display_id) {
+    for (int i = 0; i < g_bar_manager.bar_count; ++i) {
+      struct bar* bar = g_bar_manager.bars[i];
+      if (bar->did == popup->display_id) return bar->adid;
+    }
+  }
+  return g_bar_manager.active_adid;
 }
 
 static CGRect popup_get_frame(struct popup* popup) {
@@ -76,7 +93,7 @@ static void popup_order_windows(struct popup* popup) {
 }
 
 static void popup_calculate_popup_anchor_for_bar_item(struct popup* popup, struct bar_item* bar_item, struct bar* bar) {
-  if (popup->adid != g_bar_manager.active_adid) return;
+  if (popup->adid != popup_display_adid(popup)) return;
   struct window* window = bar_item_get_window(bar_item, popup->adid);
 
   if (!bar_item->popup.overrides_cell_size)
@@ -114,7 +131,7 @@ static void popup_calculate_popup_anchor_for_bar_item(struct popup* popup, struc
 
 // machy fork: is there more content than the popup is allowed to show?
 bool popup_is_scrollable(struct popup* popup) {
-  return popup->max_height > 0 && popup->content_height > popup->max_height;
+  return popup->max_height > 0 && popup->scroll_max_offset > 0;
 }
 
 void popup_reset_scroll(struct popup* popup) {
@@ -130,6 +147,8 @@ bool popup_scroll(struct popup* popup, int delta) {
   int step = (int)(popup->scroll_step > 0 ? popup->scroll_step : 1);
   int offset = popup->scroll_offset - (delta > 0 ? step : -step);
   if (offset < 0) offset = 0;
+  if ((uint32_t)offset > popup->scroll_max_offset)
+    offset = (int)popup->scroll_max_offset;
   if (offset == popup->scroll_offset) return false;
   popup->scroll_offset = offset;
   return true;
@@ -181,6 +200,9 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
   // exactly what upstream does.
   uint32_t item_count = popup->num_items > 0 ? popup->num_items : 1;
   uint32_t row_height[item_count];
+  bool row_scrollable[item_count];
+  bool row_visible[item_count];
+  uint32_t row_y[item_count];
   int32_t item_row[item_count];
   uint32_t num_rows = 0;
 
@@ -192,8 +214,10 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
 
     uint32_t cell_height = popup->horizontal
                            ? height
-                           : max(bar_item_get_height(bar_item),
-                                 popup->cell_size              );
+                           : bar_item->popup_cell_height > 0
+                             ? bar_item->popup_cell_height
+                             : max(bar_item_get_height(bar_item),
+                                   popup->cell_size              );
 
     bool joins = num_rows > 0
                  && (popup->horizontal || bar_item->popup_inline);
@@ -201,8 +225,11 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     if (joins) {
       if (cell_height > row_height[num_rows - 1])
         row_height[num_rows - 1] = cell_height;
+      if (bar_item->popup_scrollable)
+        row_scrollable[num_rows - 1] = true;
     } else {
       row_height[num_rows] = cell_height;
+      row_scrollable[num_rows] = bar_item->popup_scrollable;
       num_rows++;
     }
     item_row[j] = num_rows - 1;
@@ -211,44 +238,60 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
   popup->content_height = 2*border;
   for (uint32_t r = 0; r < num_rows; r++) popup->content_height += row_height[r];
 
-  // The visible slice of rows, [first_row, last_row). Without a max_height (or
-  // with content that fits under it) that is every row and the popup behaves
-  // as it always has.
-  uint32_t first_row = 0;
-  uint32_t last_row = num_rows;
+  // Rows explicitly marked `scrollable=on` form one scrolling list region.
+  // Everything before and after that region stays fixed. With no marked row,
+  // retain the fork's original whole-card scrolling behavior.
+  uint32_t scroll_first = 0;
+  uint32_t scroll_last = num_rows > 0 ? num_rows - 1 : 0;
+  bool scoped_scroll = false;
+  for (uint32_t r = 0; r < num_rows; r++) {
+    row_visible[r] = true;
+    if (!row_scrollable[r]) continue;
+    if (!scoped_scroll) scroll_first = r;
+    scroll_last = r;
+    scoped_scroll = true;
+  }
 
-  if (!popup->horizontal && popup_is_scrollable(popup)) {
-    uint32_t budget = popup->max_height > 2*border
-                      ? popup->max_height - 2*border
-                      : 0;
+  uint32_t fixed_height = 0;
+  for (uint32_t r = 0; r < num_rows; r++) {
+    if (r < scroll_first || r > scroll_last) fixed_height += row_height[r];
+  }
 
-    // The furthest we may scroll is the first row from which everything left
-    // still fits, so the last page is never a lone row above dead space.
-    uint32_t max_scroll = num_rows > 0 ? num_rows - 1 : 0;
+  popup->scroll_max_offset = 0;
+  if (!popup->horizontal && popup->max_height > 2*border + fixed_height
+      && popup->content_height > popup->max_height) {
+    uint32_t budget = popup->max_height - 2*border - fixed_height;
+    uint32_t max_start = scroll_last;
     uint32_t acc = 0;
-    for (int32_t r = (int32_t)num_rows - 1; r >= 0; r--) {
+    for (int32_t r = (int32_t)scroll_last; r >= (int32_t)scroll_first; r--) {
       if (acc + row_height[r] > budget) break;
       acc += row_height[r];
-      max_scroll = (uint32_t)r;
+      max_start = (uint32_t)r;
     }
-
+    popup->scroll_max_offset = max_start - scroll_first;
     if (popup->scroll_offset < 0) popup->scroll_offset = 0;
-    if ((uint32_t)popup->scroll_offset > max_scroll)
-      popup->scroll_offset = (int)max_scroll;
+    if ((uint32_t)popup->scroll_offset > popup->scroll_max_offset)
+      popup->scroll_offset = (int)popup->scroll_max_offset;
 
-    first_row = (uint32_t)popup->scroll_offset;
+    uint32_t visible_first = scroll_first + (uint32_t)popup->scroll_offset;
+    uint32_t visible_last = visible_first;
     acc = 0;
-    last_row = first_row;
-    for (uint32_t r = first_row; r < num_rows; r++) {
+    for (uint32_t r = visible_first; r <= scroll_last; r++) {
       if (acc + row_height[r] > budget) break;
       acc += row_height[r];
-      last_row = r + 1;
+      visible_last = r + 1;
     }
-    // A single row taller than the budget still has to be drawn; better an
-    // overlong popup than an empty one.
-    if (last_row == first_row && num_rows > 0) last_row = first_row + 1;
+    if (visible_last == visible_first) visible_last = visible_first + 1;
+    for (uint32_t r = scroll_first; r <= scroll_last; r++)
+      row_visible[r] = r >= visible_first && r < visible_last;
   } else {
     popup->scroll_offset = 0;
+  }
+
+  uint32_t cursor_y = border;
+  for (uint32_t r = 0; r < num_rows; r++) {
+    row_y[r] = cursor_y;
+    if (row_visible[r]) cursor_y += row_height[r];
   }
 
   int32_t current_row = -1;
@@ -263,7 +306,7 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     // Scrolled out of view: park the window offscreen. bar.c hides items the
     // same way, and it keeps the popup's item list untouched, so the next
     // scroll brings the row straight back.
-    if (row < first_row || row >= last_row) {
+    if (!row_visible[row]) {
       if (popup->adid > 0) {
         struct window* window = bar_item_get_window(bar_item, popup->adid);
         if (!CGPointEqualToPoint(window->origin, g_nirvana))
@@ -273,7 +316,6 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     }
 
     if ((int32_t)row != current_row) {
-      if (current_row >= 0) y += row_height[current_row];
       if (!popup->horizontal) x = 0;
       current_row = (int32_t)row;
     }
@@ -292,7 +334,7 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     uint32_t bar_item_display_length = bar_item_get_length(bar_item, true);
     if (popup->adid > 0) {
       CGRect frame = {{popup->anchor.x + item_x,
-                       popup->anchor.y + y},
+                       popup->anchor.y + row_y[row]},
                       {bar_item_display_length,
                        item_height             }  };
 
@@ -305,7 +347,7 @@ void popup_calculate_bounds(struct popup* popup, struct bar* bar) {
     x += item_width;
     if (!popup->horizontal && x > width) width = x;
   }
-  if (current_row >= 0) y += row_height[current_row];
+  y = cursor_y;
 
   for (int j = 0; j < popup->num_items; j++) {
     if (popup->adid <= 0) break;
@@ -483,7 +525,7 @@ void popup_change_space(struct popup* popup, uint64_t dsid, uint32_t adid) {
     bar_item_change_space(bar_item, dsid, adid);
   }
 
-  if (popup->drawing) {
+  if (popup->drawing && adid == popup_display_adid(popup)) {
     window_send_to_space(&popup->window, dsid);
   }
 }
@@ -522,10 +564,12 @@ void popup_serialize(struct popup* popup, char* indent, FILE* rsp) {
 
   fprintf(rsp, "%s\"drawing\": \"%s\",\n"
                "%s\"horizontal\": \"%s\",\n"
+               "%s\"display_id\": %u,\n"
                "%s\"height\": %d,\n"
                "%s\"max_height\": %u,\n"
                "%s\"content_height\": %u,\n"
                "%s\"scroll_offset\": %d,\n"
+               "%s\"scroll_max_offset\": %u,\n"
                "%s\"scroll_step\": %u,\n"
                "%s\"blur_radius\": %u,\n"
                "%s\"y_offset\": %d,\n"
@@ -533,10 +577,12 @@ void popup_serialize(struct popup* popup, char* indent, FILE* rsp) {
                "%s\"background\": {\n",
                indent, format_bool(popup->drawing),
                indent, format_bool(popup->horizontal),
+               indent, popup->display_id,
                indent, popup->overrides_cell_size ? popup->cell_size : -1,
                indent, popup->max_height,
                indent, popup->content_height,
                indent, popup->scroll_offset,
+               indent, popup->scroll_max_offset,
                indent, popup->scroll_step,
                indent, popup->blur_radius,
                indent, popup->y_offset,
@@ -599,7 +645,40 @@ static bool popup_set_topmost(struct popup* popup, bool topmost) {
 
 bool popup_parse_sub_domain(struct popup* popup, FILE* rsp, struct token property, char* message) {
   bool needs_refresh = false;
-  if (token_equals(property, PROPERTY_YOFFSET)) {
+  if (token_equals(property, "display")) {
+    struct token value = get_token(&message);
+    uint32_t did = 0;
+    if (token_equals(value, "mouse")) {
+      CGEventRef event = CGEventCreate(NULL);
+      if (!event) return false;
+      CGPoint point = CGEventGetLocation(event);
+      CFRelease(event);
+      uint32_t count = 0;
+      if (CGGetDisplaysWithPoint(point, 1, &did, &count) != kCGErrorSuccess
+          || count == 0) return false;
+    } else if (!token_equals(value, "active")) {
+      // Resolve an explicit arrangement to a physical ID once, at set time.
+      char* number = token_to_string(value);
+      char* end = NULL;
+      unsigned long adid = strtoul(number, &end, 10);
+      bool valid = number[0] >= '0' && number[0] <= '9' && *end == '\0';
+      free(number);
+      if (valid) {
+        for (int i = 0; i < g_bar_manager.bar_count; ++i) {
+          if (g_bar_manager.bars[i]->adid == adid)
+            did = g_bar_manager.bars[i]->did;
+        }
+      }
+      if (!did) {
+        respond(rsp, "[!] Popup display must be 'mouse', 'active', or an available display index\n");
+        return false;
+      }
+    }
+    if (popup->display_id == did) return false;
+    popup->display_id = did;
+    popup->needs_ordering = true;
+    return true;
+  } else if (token_equals(property, PROPERTY_YOFFSET)) {
     ANIMATE(popup_set_yoffset, popup, popup->y_offset, token_to_int(get_token(&message)));
   } else if (token_equals(property, PROPERTY_DRAWING)) {
     return popup_set_drawing(popup,

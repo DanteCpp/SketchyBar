@@ -49,6 +49,22 @@ popup box and over the bar; snapping keeps every visible row whole.
 A row that has subscribed to `mouse.scrolled` keeps the wheel for itself — a
 volume slider still changes the volume rather than scrolling the card.
 
+### `scrollable` — keep popup chrome fixed
+
+```
+sketchybar --set popup.network.list.1 scrollable=on
+```
+
+When at least one popup row is marked `scrollable=on`, only the contiguous row
+region from the first marked row through the last one participates in popup
+scrolling. Rows before it (headers, stats and actions) and after it (the card's
+bottom inset) remain fixed. With no marked rows, `popup.max_height` retains its
+original whole-card scrolling behavior for compatibility.
+
+Popup items may also set `cell_height=<points>` to override the popup's normal
+row floor for that row. Machy uses it for exact top/bottom insets and divider
+rows; ordinary items keep the inherited popup height.
+
 ## `background.fill` — a share bar behind a row
 
 ```
@@ -68,6 +84,22 @@ hairline track — what these cards use — is unhittable in practice, so the hi
 test now takes the slider's horizontal span at any height within the row. The
 row you can see is the row you can grab; `click_script` still receives the new
 value in `$PERCENTAGE`.
+
+## `popup.display` — open without moving application focus
+
+`popup.display=mouse` captures the display under the pointer when the command
+is processed. Subsequent refreshes keep the card on that physical display,
+without focusing an application or waiting for a display-focus notification.
+`popup.display=active` restores the default behavior. An available arrangement
+index (for example `popup.display=2`) explicitly selects a display.
+
+Nested popups inherit the outer card's display. If the selected monitor is
+removed, routing falls back to the active display. The query field
+`popup.display_id` reports the selected physical display ID (0 means active).
+
+Validation: `make clean && make arm64 && python3 tests/popup-display.py`.
+The test briefly creates a separate transparent bar and exercises every
+connected display without moving the pointer or changing application focus.
 
 ## Building
 

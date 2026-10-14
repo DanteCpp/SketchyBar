@@ -82,13 +82,18 @@ void slider_calculate_bounds(struct slider* slider, uint32_t x, uint32_t y) {
                               * ((float)slider->percentage)/100.f,
                               slider->background.bounds.size.height);
 
+  // A Machy switch gives the knob a fixed width so it reads as a proper
+  // square thumb rather than a one-pixel caret. Use the rendered text length
+  // here: bounds.size.width is only the glyph path and ignores that declared
+  // width, which placed almost the whole thumb beyond the track at 100%.
+  uint32_t knob_width = text_get_length(&slider->knob, false);
   int32_t raw_offset = ((float)slider->percentage)/100.f
                         * slider->background.bounds.size.width
-                        - slider->knob.bounds.size.width / 2.;
+                        - knob_width / 2.;
 
   uint32_t knob_offset = max(min(raw_offset,
                                  slider->background.bounds.size.width
-                                 - (slider->knob.bounds.size.width + 1.f)), 0.f);
+                                 - (knob_width + 1.f)), 0.f);
 
   text_calculate_bounds(&slider->knob, x + knob_offset, y);
 }

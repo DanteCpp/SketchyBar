@@ -36,6 +36,8 @@ void bar_item_init(struct bar_item* bar_item, struct bar_item* default_item) {
   bar_item->shadow = false;
   bar_item->scroll_texts = false;
   bar_item->popup_inline = false;
+  bar_item->popup_scrollable = false;
+  bar_item->popup_cell_height = 0;
   bar_item->mouse_over = false;
 
   bar_item->has_const_width = false;
@@ -901,6 +903,8 @@ void bar_item_serialize(struct bar_item* bar_item, FILE* rsp) {
                "\t\t\"padding_right\": %d,\n"
                "\t\t\"scroll_texts\": \"%s\",\n"
                "\t\t\"inline\": \"%s\",\n"
+               "\t\t\"scrollable\": \"%s\",\n"
+               "\t\t\"cell_height\": %u,\n"
                "\t\t\"width\": %d,\n"
                "\t\t\"background\": {\n",
                bar_item->name,
@@ -915,6 +919,8 @@ void bar_item_serialize(struct bar_item* bar_item, FILE* rsp) {
                bar_item->background.padding_right,
                format_bool(bar_item->scroll_texts),
                format_bool(bar_item->popup_inline),
+               format_bool(bar_item->popup_scrollable),
+               bar_item->popup_cell_height,
                bar_item->has_const_width ? bar_item->custom_width : -1);
 
   background_serialize(&bar_item->background, "\t\t\t", rsp, true);
@@ -1090,6 +1096,19 @@ void bar_item_parse_set_message(struct bar_item* bar_item, char* message, FILE* 
                                       bar_item->popup_inline);
     if (inl != bar_item->popup_inline) {
       bar_item->popup_inline = inl;
+      needs_refresh = true;
+    }
+  } else if (token_equals(property, PROPERTY_SCROLLABLE)) {
+    bool scrollable = evaluate_boolean_state(get_token(&message),
+                                             bar_item->popup_scrollable);
+    if (scrollable != bar_item->popup_scrollable) {
+      bar_item->popup_scrollable = scrollable;
+      needs_refresh = true;
+    }
+  } else if (token_equals(property, PROPERTY_CELL_HEIGHT)) {
+    uint32_t height = token_to_uint32t(get_token(&message));
+    if (height != bar_item->popup_cell_height) {
+      bar_item->popup_cell_height = height;
       needs_refresh = true;
     }
   } else if (token_equals(property, PROPERTY_WIDTH)) {

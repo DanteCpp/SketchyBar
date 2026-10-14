@@ -41,6 +41,8 @@ struct bar_item {
   // machy fork: continue on the previous popup row instead of opening a new
   // one. Only meaningful for items whose position is POSITION_POPUP.
   bool popup_inline;
+  bool popup_scrollable;
+  uint32_t popup_cell_height;
   char align;
   uint32_t custom_width;
   uint32_t blur_radius;

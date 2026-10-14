@@ -109,6 +109,10 @@
 // machy fork: lay this item out on the same popup row as the previous one,
 // instead of starting a new row below it. Turns a vertical popup into a grid.
 #define PROPERTY_INLINE                        "inline"
+// machy fork: rows marked scrollable form the popup's scrolling list region;
+// unmarked rows before and after it remain fixed.
+#define PROPERTY_SCROLLABLE                    "scrollable"
+#define PROPERTY_CELL_HEIGHT                   "cell_height"
 
 #define DOMAIN_BAR                             "--bar"
 #define PROPERTY_POSITION                      "position"
